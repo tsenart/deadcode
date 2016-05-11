@@ -12,19 +12,34 @@ import (
 )
 
 var exitCode int
+var ignoreNames []string
+
+func init() {
+	flag.String("ignore", "", "sourcefile:name to ignore, example: somefile.go:aVariableFoo dir1/anotherfile.go:aConstBar")
+}
 
 func main() {
 	flag.Parse()
-	if flag.NArg() == 0 {
-		doDir(".")
-	} else {
-		for _, name := range flag.Args() {
-			// Is it a directory?
-			if fi, err := os.Stat(name); err == nil && fi.IsDir() {
-				doDir(name)
-			} else {
-				errorf("not a directory: %s", name)
-			}
+
+	if flag.Lookup("ignore") != nil {
+		for _, name := range strings.Fields(flag.Lookup("ignore").Value.String()) {
+			ignoreNames = append(ignoreNames, name)
+		}
+	}
+
+	scanDirectories := flag.Args()
+
+	if len(scanDirectories) == 0 {
+		scanDirectories = append(scanDirectories, ".")
+	}
+
+	for _, name := range scanDirectories {
+		// Is it a directory?
+
+		if fi, err := os.Stat(name); err == nil && fi.IsDir() {
+			doDir(name)
+		} else {
+			errorf("not a directory: %s", name)
 		}
 	}
 	os.Exit(exitCode)
@@ -61,6 +76,15 @@ type Package struct {
 	fs   *token.FileSet
 	decl map[string]ast.Node
 	used map[string]bool
+}
+
+func skipFileAndName(filename, name string) bool {
+	for _, e := range ignoreNames {
+		if e == fmt.Sprintf("%s:%s", filename, name) {
+			return true
+		}
+	}
+	return false
 }
 
 func doPackage(fs *token.FileSet, pkg *ast.Package) {
@@ -116,7 +140,7 @@ func doPackage(fs *token.FileSet, pkg *ast.Package) {
 	// reports.
 	reports := Reports(nil)
 	for name, node := range p.decl {
-		if !p.used[name] {
+		if !p.used[name] && !skipFileAndName(fs.File(node.Pos()).Name(), name) {
 			reports = append(reports, Report{node.Pos(), name})
 		}
 	}
