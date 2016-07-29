@@ -38,15 +38,14 @@ func errorf(format string, args ...interface{}) {
 }
 
 func doDir(name string) {
-	notests := func(info os.FileInfo) bool {
-		if !info.IsDir() && strings.HasSuffix(info.Name(), ".go") &&
-			!strings.HasSuffix(info.Name(), "_test.go") {
+	gofiles := func(info os.FileInfo) bool {
+		if !info.IsDir() && strings.HasSuffix(info.Name(), ".go") {
 			return true
 		}
 		return false
 	}
 	fs := token.NewFileSet()
-	pkgs, err := parser.ParseDir(fs, name, notests, parser.Mode(0))
+	pkgs, err := parser.ParseDir(fs, name, gofiles, parser.Mode(0))
 	if err != nil {
 		errorf("%s", err)
 		return
