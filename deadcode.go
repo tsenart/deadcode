@@ -57,18 +57,25 @@ func doDir(name string) {
 }
 
 type Package struct {
-	p    *ast.Package
-	fs   *token.FileSet
-	decl map[string]ast.Node
-	used map[string]bool
+	p                   *ast.Package
+	fs                  *token.FileSet
+	decl                map[string]ast.Node
+	used                map[string]bool
+	currentFuncName     *string
+	funcSelfReferential map[string]bool
+	funcUsedOutsideBody map[string]bool
 }
 
 func doPackage(fs *token.FileSet, pkg *ast.Package) {
+	empty := ""
 	p := &Package{
-		p:    pkg,
-		fs:   fs,
-		decl: make(map[string]ast.Node),
-		used: make(map[string]bool),
+		p:                   pkg,
+		fs:                  fs,
+		currentFuncName:     &empty,
+		decl:                make(map[string]ast.Node),
+		used:                make(map[string]bool),
+		funcSelfReferential: make(map[string]bool),
+		funcUsedOutsideBody: make(map[string]bool),
 	}
 	for _, file := range pkg.Files {
 		for _, decl := range file.Decls {
@@ -117,19 +124,39 @@ func doPackage(fs *token.FileSet, pkg *ast.Package) {
 	// reports.
 	reports := Reports(nil)
 	for name, node := range p.decl {
+		if _, ok := node.(*ast.FuncDecl); ok {
+			if p.used[name] && !p.funcUsedOutsideBody[name] && p.funcSelfReferential[name] {
+				reports = append(reports, Report{node.Pos(), name, onlySelfReferential})
+
+				continue
+			}
+		}
 		if !p.used[name] {
-			reports = append(reports, Report{node.Pos(), name})
+			reports = append(reports, Report{node.Pos(), name, unused})
 		}
 	}
 	sort.Sort(reports)
 	for _, report := range reports {
-		errorf("%s: %s is unused", fs.Position(report.pos), report.name)
+		switch report.typ {
+		case unused:
+			errorf("%s: %s is unused", fs.Position(report.pos), report.name)
+			break
+		case onlySelfReferential:
+			errorf("%s: func %s is only used self-referentially", fs.Position(report.pos), report.name)
+			break
+		}
 	}
 }
+
+const (
+	unused = iota
+	onlySelfReferential
+)
 
 type Report struct {
 	pos  token.Pos
 	name string
+	typ  int
 }
 type Reports []Report
 
@@ -153,12 +180,19 @@ func (p *Package) Visit(node ast.Node) ast.Visitor {
 		}
 	case *ast.BlockStmt:
 		// - function bodies
-		for _, stmt := range n.List {
-			ast.Walk(&u, stmt)
-		}
+		// for _, stmt := range n.List {
+		// 	ast.Walk(&u, stmt)
+		// }
 	case *ast.FuncDecl:
+		name := n.Name.Name
+		p.currentFuncName = &name
+		pu := usedWalker(*p)
 		// - function signatures
-		ast.Walk(&u, n.Type)
+		ast.Walk(&pu, n.Type)
+		ast.Walk(&pu, n.Body)
+
+		empty := ""
+		p.currentFuncName = &empty
 	case *ast.TypeSpec:
 		// - type declarations
 		ast.Walk(&u, n.Type)
@@ -174,6 +208,11 @@ func (p *usedWalker) Visit(node ast.Node) ast.Visitor {
 	switch n := node.(type) {
 	case *ast.Ident:
 		p.used[n.Name] = true
+		if n.Name == *p.currentFuncName {
+			p.funcSelfReferential[n.Name] = true
+		} else {
+			p.funcUsedOutsideBody[n.Name] = true
+		}
 	}
 	return p
 }
